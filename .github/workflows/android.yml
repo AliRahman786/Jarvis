@@ -1,11 +1,21 @@
-name: Android CI
+name: Build and Release Android APK
 
 on:
   push:
     branches: [ "main", "master" ]
+    tags:
+      - "v*"
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (e.g. v1.0.0 or latest)'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -31,9 +41,37 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload Debug APK
+      - name: Prepare Release Binary
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk release-assets/JARVIS_Mark_LIV.apk
+
+      - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: JARVIS_Mark_LIV_APK
+          path: release-assets/JARVIS_Mark_LIV.apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))) || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || 'latest' }}
+          name: "JARVIS Mark-LIV - Latest Release"
+          body: |
+            ## 🚀 JARVIS Mark-LIV Official Release
+            
+            ### 📱 Download & Installation
+            Download the attached **`JARVIS_Mark_LIV.apk`** below directly to your Android device to install.
+            
+            ### ✨ Features & Upgrades:
+            - **Full-Duplex Voice Receptor**: Real-time voice commands and seamless continuous conversation.
+            - **Zero Acoustic Feedback**: Automatic speaker isolation prevents speaker feedback loops and non-stopping sound.
+            - **Tactical Telemetry & Google Maps**: Inbuilt tactical radar with live GPS coordinate calibration.
+            - **Creator Authority Protocols**: Dedicated boss & developer recognition for Ali Rahman.
+          draft: false
+          prerelease: false
+          files: release-assets/JARVIS_Mark_LIV.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

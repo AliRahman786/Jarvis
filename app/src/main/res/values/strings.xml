@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">JARVIS Mark-LIV</string>
+    <string name="jarvis_title">J.A.R.V.I.S.</string>
+    <string name="jarvis_subtitle">JUST A RATHER VERY INTELLIGENT SYSTEM</string>
+    <string name="system_ready">SYSTEM ONLINE // MARK-LIV INITIALIZED</string>
+    <string name="core_standby">ARC REACTOR CORE // STANDBY</string>
+    <string name="core_listening">AUDIO RECEPTORS ACTIVE // LISTENING</string>
+    <string name="core_thinking">QUANTUM HEURISTIC ENGINE // COMPUTING</string>
+    <string name="core_speaking">VOCAL SYNTHESIZER ENGAGED</string>
+    <string name="tap_to_talk">Tap or hold to speak</string>
+    <string name="send_message">Send command</string>
+    <string name="settings">Settings</string>
+    <string name="memory_manager">Memory Core</string>
+    <string name="tool_registry">Subsystem Tools</string>
+    <string name="accessibility_service_label">JARVIS Mark-LIV Automation</string>
+    <string name="accessibility_service_description">Enables hands-free screen reading, vision telemetry, and automatic task execution across apps.</string>
+    <string name="notification_channel_name">JARVIS Neural Core Service</string>
+    <string name="notification_channel_desc">Maintains persistent background voice receptors and automated tactical intelligence.</string>
+</resources>

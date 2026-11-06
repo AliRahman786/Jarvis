@@ -1,0 +1,6 @@
+{
+  "name": "JARVIS Mark-LIV",
+  "description": "Tactical HUD with Google Maps navigation, live weather, Accompanist fine location permission GPS centering, and multimodal intelligence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

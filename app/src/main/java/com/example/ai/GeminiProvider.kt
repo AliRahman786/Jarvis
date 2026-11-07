@@ -891,6 +891,97 @@ class GeminiProvider : AiProvider {
         }
     }
 
+    /**
+     * Transcribes 16kHz mono WAV audio directly via Gemini multimodal inlineData ("audio/wav"),
+     * enabling continuous hands-free voice input (like Gemini Live & ChatGPT Voice) without triggering
+     * Android SpeechRecognizer's system start/stop beep chimes.
+     */
+    suspend fun transcribeAudioWav(
+        wavBytes: ByteArray,
+        languageCode: String = "en-US",
+        apiKey: String,
+        preferredModel: String = defaultModel
+    ): String? = withContext(Dispatchers.IO) {
+        val effectiveKey = resolveEffectiveGeminiKey(apiKey)
+        val keys = parseApiKeys(effectiveKey)
+        if (keys.isEmpty() || wavBytes.size <= 44) return@withContext null
+
+        val cleanVariant = normalizeModel(preferredModel)
+        if (discoveredLiveModels.isEmpty()) {
+            discoverSupportedModels(effectiveKey)
+        }
+        val candidates = getEndpointCandidatesForVariant(cleanVariant)
+        val base64Audio = Base64.encodeToString(wavBytes, Base64.NO_WRAP)
+
+        for (k in keys) {
+            for (endpointModel in candidates) {
+                val cachedVer = workingApiVersionCache[endpointModel]
+                val versions = if (cachedVer != null) listOf(cachedVer, "v1beta", "v1").distinct() else listOf("v1beta", "v1")
+                for (apiVer in versions) {
+                    try {
+                        val url = "https://generativelanguage.googleapis.com/$apiVer/models/$endpointModel:generateContent?key=$k"
+                        val payload = JSONObject().apply {
+                            put("contents", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("role", "user")
+                                    put("parts", JSONArray().apply {
+                                        put(JSONObject().apply {
+                                            put("inlineData", JSONObject().apply {
+                                                put("mimeType", "audio/wav")
+                                                put("data", base64Audio)
+                                            })
+                                        })
+                                        put(JSONObject().apply {
+                                            put(
+                                                "text",
+                                                "Transcribe the spoken voice in this audio clip accurately (language hint: $languageCode). " +
+                                                    "Output ONLY the exact words spoken by the user with no quotes, no prefixes, and no commentary. " +
+                                                    "If there is no clear human speech or only silence/noise, output NONE."
+                                            )
+                                        })
+                                    })
+                                })
+                            })
+                            put("generationConfig", JSONObject().apply {
+                                put("temperature", 0.0)
+                                put("maxOutputTokens", 180)
+                            })
+                        }
+
+                        val req = Request.Builder()
+                            .url(url)
+                            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+
+                        httpClient.newCall(req).execute().use { resp ->
+                            val body = resp.body?.string() ?: ""
+                            if (resp.isSuccessful && body.isNotBlank()) {
+                                workingEndpointCache[cleanVariant] = endpointModel
+                                workingApiVersionCache[endpointModel] = apiVer
+                                val root = JSONObject(body)
+                                val candArr = root.optJSONArray("candidates")
+                                val firstCand = candArr?.optJSONObject(0)
+                                val partsArr = firstCand?.optJSONObject("content")?.optJSONArray("parts")
+                                val rawText = partsArr?.optJSONObject(0)?.optString("text", "")?.trim() ?: ""
+                                val cleanedText = rawText.removeSurrounding("\"").trim()
+                                if (cleanedText.isBlank() ||
+                                    cleanedText.equals("NONE", ignoreCase = true) ||
+                                    cleanedText.equals("[SILENCE]", ignoreCase = true)
+                                ) {
+                                    return@withContext ""
+                                }
+                                return@withContext cleanedText
+                            } else if (resp.code == 404) {
+                                continue
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+        null
+    }
+
     override suspend fun generateStream(
         apiKey: String,
         model: String,

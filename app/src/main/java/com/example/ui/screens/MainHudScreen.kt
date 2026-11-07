@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.Extension
@@ -116,9 +117,11 @@ fun MainHudScreen(
     var showBiometricsModal by remember { mutableStateOf(false) }
     var showMemoryModal by remember { mutableStateOf(false) }
     var showLanguageModal by remember { mutableStateOf(false) }
+    var showAuthModal by remember { mutableStateOf(false) }
     val showLocationModal by viewModel.showLocationModal.collectAsState()
     val showPluginsModal by viewModel.showPluginsModal.collectAsState()
     val userCity by viewModel.prefs.userLocationCityFlow.collectAsState()
+    val currentAuthUser by viewModel.authManager.currentUser.collectAsState()
 
     BoxWithConstraints(
         modifier = modifier
@@ -129,12 +132,14 @@ fun MainHudScreen(
             .testTag("main_hud_screen")
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 1. TOP HEADER (Chat Button | J A R V I S Dynamic Greeting | Location Badge | Settings Gear)
+            // 1. TOP HEADER (Chat Button | J A R V I S Dynamic Greeting | Location Badge | Auth & Settings)
             TopFuturisticHeader(
-                userName = userName,
+                userName = currentAuthUser?.displayName?.takeIf { it.isNotBlank() } ?: userName,
                 userCity = userCity,
+                isSignedIn = currentAuthUser != null,
                 accentColor = accentColor,
                 onQuickChatClick = { viewModel.setActivePanel("CHAT") },
+                onAuthClick = { showAuthModal = true },
                 onSettingsClick = { viewModel.setActivePanel("SETTINGS") },
                 onLocationClick = { viewModel.openLocationModal() }
             )
@@ -244,6 +249,14 @@ fun MainHudScreen(
             onNavigateToChat = { viewModel.setActivePanel("CHAT") }
         )
     }
+
+    if (showAuthModal) {
+        AuthLoginModal(
+            authManager = viewModel.authManager,
+            accentColor = accentColor,
+            onDismiss = { showAuthModal = false }
+        )
+    }
 }
 
 /**
@@ -256,8 +269,10 @@ fun MainHudScreen(
 private fun TopFuturisticHeader(
     userName: String,
     userCity: String,
+    isSignedIn: Boolean,
     accentColor: Color,
     onQuickChatClick: () -> Unit,
+    onAuthClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onLocationClick: () -> Unit
 ) {
@@ -345,21 +360,43 @@ private fun TopFuturisticHeader(
                 }
             }
 
-            // Right Settings Gear Button
-            IconButton(
-                onClick = onSettingsClick,
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(accentColor.copy(alpha = 0.12f))
-                    .border(1.dp, accentColor.copy(alpha = 0.4f), CircleShape)
+            // Right Auth Account + Settings Gear Buttons
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    tint = accentColor,
-                    modifier = Modifier.size(18.dp)
-                )
+                IconButton(
+                    onClick = onAuthClick,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(if (isSignedIn) SuccessEmerald.copy(alpha = 0.16f) else accentColor.copy(alpha = 0.12f))
+                        .border(1.dp, if (isSignedIn) SuccessEmerald else accentColor.copy(alpha = 0.4f), CircleShape)
+                        .testTag("header_auth_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AccountCircle,
+                        contentDescription = "User Authentication",
+                        tint = if (isSignedIn) SuccessEmerald else accentColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = onSettingsClick,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(accentColor.copy(alpha = 0.12f))
+                        .border(1.dp, accentColor.copy(alpha = 0.4f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = accentColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
     }
@@ -514,6 +551,8 @@ private fun HomeScreenContent(
         } else if (isTacticalMapActive) {
             val activeRoute by viewModel.activeRoute.collectAsState()
             val activePlace by viewModel.activePlace.collectAsState()
+            val searchResultPlaces by viewModel.searchResultPlaces.collectAsState()
+            val liveUserGpsLocation by viewModel.liveUserGpsLocation.collectAsState()
             TacticalMapView(
                 accentColor = accentColor,
                 targetCity = mapCity,
@@ -521,7 +560,10 @@ private fun HomeScreenContent(
                 longitude = mapLongitude,
                 routeCalculation = activeRoute,
                 placeLocation = activePlace,
+                searchResults = searchResultPlaces,
+                liveUserGpsLocation = liveUserGpsLocation,
                 onClearRoute = { viewModel.clearTacticalRoute() },
+                onUserLocationUpdated = { viewModel.onUserGpsLocationUpdated(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)

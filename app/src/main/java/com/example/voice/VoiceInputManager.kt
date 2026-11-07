@@ -1,29 +1,60 @@
 package com.example.voice
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
+import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.ArrayDeque
 import java.util.Locale
+import kotlin.math.log10
+import kotlin.math.sqrt
 
 /**
- * Full-Duplex Neural Voice Receptor with Real-Time Barge-In Interruption.
- * Allows the operator to interrupt JARVIS mid-sentence at any moment:
- * as soon as non-echo operator speech is detected via partial recognition or high-decibel voice onset,
- * JARVIS immediately halts vocal transmission and listens to the operator's live words.
+ * Zero-Beep Continuous Neural Voice Receptor (Gemini Live / ChatGPT Voice Mode Architecture).
+ *
+ * Key Guarantees:
+ * 1. NEVER calls AudioManager.setStreamVolume or adjustStreamVolume on STREAM_SYSTEM or any stream,
+ *    completely eliminating automatic toggling of the Android Quick Settings Silent/Mute button.
+ * 2. Uses a persistent silent AudioRecord stream (16kHz 16-bit mono PCM) with hardware
+ *    AcousticEchoCanceler, NoiseSuppressor, and Adaptive Voice Activity Detection (VAD) when a
+ *    cloud audio transcriber (Gemini multimodal audio) is available — producing ZERO system start/stop
+ *    beeps when turning the mic on, during silence, or when transitioning back to listening after
+ *    answering a command.
  */
 class VoiceInputManager(private val context: Context) {
     private var speechRecognizer: SpeechRecognizer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private val receptorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var continuousRecordJob: Job? = null
+    private var activeAudioRecord: AudioRecord? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
 
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
@@ -38,27 +69,43 @@ class VoiceInputManager(private val context: Context) {
     private var onErrorCallback: ((String) -> Unit)? = null
 
     /**
-     * Fired the instant the operator interrupts JARVIS mid-speech (barge-in),
-     * allowing VoiceOutputManager to halt TTS immediately while the recognizer continues
-     * capturing the rest of the operator's sentence.
+     * Optional cloud WAV audio transcriber (e.g. GeminiProvider.transcribeAudioWav).
+     * When configured and returning non-null, VoiceInputManager uses the 100% silent
+     * AudioRecord + VAD pipeline so Android's SpeechRecognizer chime never plays.
      */
+    var cloudAudioTranscriber: (suspend (wavBytes: ByteArray, languageCode: String) -> String?)? = null
+
+    /**
+     * Returns true if a valid cloud API key is configured for silent AudioRecord + VAD transcription.
+     */
+    var canUseSilentContinuousRecorder: () -> Boolean = { false }
+
     var onBargeInInterruptCallback: ((String) -> Unit)? = null
 
     private var currentLanguageCode: String = "en-US"
     private var isPersistentMicLocked: Boolean = false
 
-    // State guards for full-duplex barge-in & echo rejection
+    @Volatile
     var isComputing: Boolean = false
+
+    @Volatile
     var isJarvisSpeaking: Boolean = false
+
+    @Volatile
     var lastJarvisSpokenText: String = ""
-    private var loudVoiceFramesWhileSpeaking: Int = 0
+
+    @Volatile
+    var lastSpeakingEndTimeMs: Long = 0L
 
     private val explicitBargeInKeywords = setOf(
         "stop", "wait", "hold", "listen", "jarvis", "quiet", "pause",
         "cancel", "enough", "no", "actually", "instead", "change", "ok", "okay", "hey"
     )
 
-    fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
+    fun isAvailable(): Boolean {
+        val hasMicFeature = context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+        return hasMicFeature || SpeechRecognizer.isRecognitionAvailable(context)
+    }
 
     fun startListening(
         languageCode: String = "en-US",
@@ -76,15 +123,290 @@ class VoiceInputManager(private val context: Context) {
         onResultCallback = onResult
         onErrorCallback = onError
 
-        if (_isListening.value || isComputing) {
+        if (isComputing || isJarvisSpeaking) {
+            return
+        }
+
+        // Prefer 100% silent continuous AudioRecord + VAD pipeline (like Gemini Live & ChatGPT Voice)
+        if (canUseSilentContinuousRecorder() && cloudAudioTranscriber != null && hasRecordAudioPermission()) {
+            if (continuousRecordJob?.isActive == true) {
+                _isListening.value = true
+                return
+            }
+            if (startSilentAudioRecordLoop()) {
+                return
+            }
+        }
+
+        if (_isListening.value) {
             return
         }
 
         launchRecognizerInternal()
     }
 
-    @Volatile
-    var lastSpeakingEndTimeMs: Long = 0L
+    private fun hasRecordAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Starts a persistent, zero-beep AudioRecord loop at 16kHz 16-bit mono PCM.
+     * Never plays OS start/stop tones and never modifies Quick Settings or AudioManager volume.
+     */
+    @SuppressLint("MissingPermission")
+    private fun startSilentAudioRecordLoop(): Boolean {
+        val sampleRate = 16000
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+        if (minBufSize <= 0) {
+            return false
+        }
+
+        val bufferSizeInBytes = maxOf(minBufSize * 2, 6400)
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                bufferSizeInBytes
+            )
+        } catch (_: Exception) {
+            null
+        } ?: return false
+
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            try {
+                recorder.release()
+            } catch (_: Exception) {}
+            return false
+        }
+
+        // Attach hardware AcousticEchoCanceler & NoiseSuppressor if supported by the device DSP
+        try {
+            if (AcousticEchoCanceler.isAvailable()) {
+                echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)?.apply {
+                    enabled = true
+                }
+            }
+        } catch (_: Exception) {}
+
+        try {
+            if (NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)?.apply {
+                    enabled = true
+                }
+            }
+        } catch (_: Exception) {}
+
+        try {
+            recorder.startRecording()
+        } catch (_: Exception) {
+            try {
+                recorder.release()
+            } catch (_: Exception) {}
+            return false
+        }
+
+        activeAudioRecord = recorder
+        _isListening.value = true
+
+        continuousRecordJob?.cancel()
+        continuousRecordJob = receptorScope.launch {
+            // 20ms frame = 320 shorts (640 bytes) at 16,000 Hz
+            val frameShorts = ShortArray(320)
+            val preRollFrames = ArrayDeque< ByteArray >(16) // ~320ms pre-speech buffer
+            val utteranceOut = ByteArrayOutputStream()
+
+            var isCapturingSpeech = false
+            var consecutiveVoiceFrames = 0
+            var silenceFramesAfterSpeech = 0
+            var totalSpeechFrames = 0
+            var adaptiveNoiseFloor = 180.0
+
+            try {
+                while (isActive && (isPersistentMicLocked || _isListening.value)) {
+                    val readCount = recorder.read(frameShorts, 0, frameShorts.size)
+                    if (readCount <= 0) continue
+
+                    val now = System.currentTimeMillis()
+                    // Gate microphone during TTS playback, computing, or 650ms acoustic decay after speaking
+                    if (isJarvisSpeaking || isComputing || (now - lastSpeakingEndTimeMs) < 650L) {
+                        _audioRmsDb.value = 0f
+                        if (isCapturingSpeech) {
+                            isCapturingSpeech = false
+                            consecutiveVoiceFrames = 0
+                            silenceFramesAfterSpeech = 0
+                            totalSpeechFrames = 0
+                            utteranceOut.reset()
+                            preRollFrames.clear()
+                            _partialTranscript.value = ""
+                        }
+                        continue
+                    }
+
+                    // Ensure _isListening reflects active silent readiness after JARVIS finishes speaking
+                    if (!_isListening.value && isPersistentMicLocked) {
+                        _isListening.value = true
+                    }
+
+                    // Compute RMS amplitude of the 20ms frame
+                    var sumSquares = 0.0
+                    for (i in 0 until readCount) {
+                        val s = frameShorts[i].toDouble()
+                        sumSquares += s * s
+                    }
+                    val rms = sqrt(sumSquares / readCount)
+
+                    // Convert RMS to normalized 0..1 visual amplitude for the 3D HUD Orb
+                    val dbNormalized = if (rms > 80.0) {
+                        ((20.0 * log10(rms / 80.0)) / 38.0).toFloat().coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                    _audioRmsDb.value = dbNormalized
+
+                    // Convert current frame shorts to little-endian PCM bytes
+                    val frameBytes = ByteArray(readCount * 2)
+                    ByteBuffer.wrap(frameBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(frameShorts, 0, readCount)
+
+                    val dynamicSpeechThreshold = maxOf(460.0, adaptiveNoiseFloor * 2.6)
+                    val isVoiceFrame = rms >= dynamicSpeechThreshold
+
+                    if (!isCapturingSpeech) {
+                        // Slowly adapt ambient noise floor during non-speech
+                        if (rms < dynamicSpeechThreshold) {
+                            adaptiveNoiseFloor = (adaptiveNoiseFloor * 0.96) + (rms.coerceIn(90.0, 650.0) * 0.04)
+                        }
+                        if (preRollFrames.size >= 16) {
+                            preRollFrames.removeFirst()
+                        }
+                        preRollFrames.addLast(frameBytes)
+
+                        if (isVoiceFrame) {
+                            consecutiveVoiceFrames++
+                            if (consecutiveVoiceFrames >= 4) { // ~80ms of clear voice onset
+                                isCapturingSpeech = true
+                                silenceFramesAfterSpeech = 0
+                                totalSpeechFrames = consecutiveVoiceFrames
+                                utteranceOut.reset()
+                                for (pre in preRollFrames) {
+                                    utteranceOut.write(pre)
+                                }
+                                preRollFrames.clear()
+                                _partialTranscript.value = "Listening..."
+                            }
+                        } else {
+                            consecutiveVoiceFrames = 0
+                        }
+                    } else {
+                        utteranceOut.write(frameBytes)
+                        totalSpeechFrames++
+
+                        if (rms >= maxOf(340.0, adaptiveNoiseFloor * 1.9)) {
+                            silenceFramesAfterSpeech = 0
+                        } else {
+                            silenceFramesAfterSpeech++
+                        }
+
+                        // Complete utterance after ~860ms (43 frames) of silence or 14 seconds (700 frames) max
+                        if (silenceFramesAfterSpeech >= 43 || totalSpeechFrames >= 700) {
+                            val capturedPcm = utteranceOut.toByteArray()
+                            val capturedSpeechFrames = totalSpeechFrames
+
+                            isCapturingSpeech = false
+                            consecutiveVoiceFrames = 0
+                            silenceFramesAfterSpeech = 0
+                            totalSpeechFrames = 0
+                            utteranceOut.reset()
+                            _audioRmsDb.value = 0f
+
+                            // Only transcribe if utterance contained meaningful speech (> 220ms)
+                            if (capturedSpeechFrames >= 12 && capturedPcm.size > 3200) {
+                                _partialTranscript.value = "Processing speech..."
+                                val wavBytes = encodePcm16MonoToWav(capturedPcm, sampleRate)
+                                val transcriber = cloudAudioTranscriber
+                                val transcript = try {
+                                    transcriber?.invoke(wavBytes, currentLanguageCode)?.trim()
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                _partialTranscript.value = ""
+
+                                if (!transcript.isNullOrBlank() && !isLikelyEcho(transcript, lastJarvisSpokenText)) {
+                                    isComputing = true
+                                    if (!isPersistentMicLocked) {
+                                        _isListening.value = false
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        onResultCallback?.invoke(transcript)
+                                    }
+                                    if (!isPersistentMicLocked) {
+                                        break
+                                    }
+                                }
+                            } else {
+                                _partialTranscript.value = ""
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                releaseSilentRecorder()
+            }
+        }
+        return true
+    }
+
+    private fun releaseSilentRecorder() {
+        try {
+            echoCanceler?.release()
+        } catch (_: Exception) {}
+        echoCanceler = null
+
+        try {
+            noiseSuppressor?.release()
+        } catch (_: Exception) {}
+        noiseSuppressor = null
+
+        try {
+            activeAudioRecord?.stop()
+        } catch (_: Exception) {}
+        try {
+            activeAudioRecord?.release()
+        } catch (_: Exception) {}
+        activeAudioRecord = null
+    }
+
+    /**
+     * Wraps raw 16-bit mono little-endian PCM bytes with a standard 44-byte RIFF/WAV header.
+     */
+    private fun encodePcm16MonoToWav(pcmData: ByteArray, sampleRate: Int): ByteArray {
+        val totalDataLen = pcmData.size + 36
+        val byteRate = sampleRate * 2 // 16-bit mono = 2 bytes per sample
+        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII))
+            putInt(totalDataLen)
+            put("WAVE".toByteArray(Charsets.US_ASCII))
+            put("fmt ".toByteArray(Charsets.US_ASCII))
+            putInt(16) // PCM chunk size
+            putShort(1) // AudioFormat 1 = PCM
+            putShort(1) // NumChannels 1 = Mono
+            putInt(sampleRate)
+            putInt(byteRate)
+            putShort(2) // BlockAlign = 2
+            putShort(16) // BitsPerSample = 16
+            put("data".toByteArray(Charsets.US_ASCII))
+            putInt(pcmData.size)
+        }.array()
+
+        return header + pcmData
+    }
 
     /**
      * Suspends microphone input while speech synthesis outputs through the speaker,
@@ -102,25 +424,29 @@ class VoiceInputManager(private val context: Context) {
         _partialTranscript.value = ""
     }
 
-    /**
-     * Safely manages speech output state without self-listening acoustic feedback.
-     */
     fun armBargeInMonitorWhileSpeaking() {
         pauseForSpeaking()
     }
-
-    private var savedSystemVolume: Int = -1
-    private var isMutedForBeep: Boolean = false
 
     private fun launchRecognizerInternal() {
         if (isComputing || isJarvisSpeaking) {
             return
         }
 
-        // Acoustic cooldown guard: wait at least 600ms after TTS completes before opening microphone
+        // If silent continuous recorder is available, always use it to avoid OS SpeechRecognizer beeps
+        if (canUseSilentContinuousRecorder() && cloudAudioTranscriber != null && hasRecordAudioPermission()) {
+            if (continuousRecordJob?.isActive == true) {
+                _isListening.value = true
+                return
+            }
+            if (startSilentAudioRecordLoop()) {
+                return
+            }
+        }
+
         val elapsedSinceSpeech = System.currentTimeMillis() - lastSpeakingEndTimeMs
-        if (elapsedSinceSpeech < 600L) {
-            val waitMs = (600L - elapsedSinceSpeech).coerceAtLeast(60L)
+        if (elapsedSinceSpeech < 650L) {
+            val waitMs = (650L - elapsedSinceSpeech).coerceAtLeast(80L)
             mainHandler.postDelayed({
                 if (!isComputing && !isJarvisSpeaking && isPersistentMicLocked) {
                     launchRecognizerInternal()
@@ -131,22 +457,14 @@ class VoiceInputManager(private val context: Context) {
 
         mainHandler.post {
             try {
-                // Completely silence OS speech recognizer start beep/chime
-                silenceSystemBeep(350L)
-
                 if (speechRecognizer == null) {
                     speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                         setRecognitionListener(object : RecognitionListener {
                             override fun onReadyForSpeech(params: Bundle?) {
                                 _isListening.value = true
-                                loudVoiceFramesWhileSpeaking = 0
-                                // Restore system audio stream as soon as listening starts
-                                restoreSystemAudio()
                             }
 
-                            override fun onBeginningOfSpeech() {
-                                loudVoiceFramesWhileSpeaking = 0
-                            }
+                            override fun onBeginningOfSpeech() {}
 
                             override fun onRmsChanged(rmsdB: Float) {
                                 if (isJarvisSpeaking) {
@@ -169,8 +487,6 @@ class VoiceInputManager(private val context: Context) {
                                 _audioRmsDb.value = 0f
                                 _partialTranscript.value = ""
 
-                                // While JARVIS is speaking or computing, ignore recognizer errors (e.g. ERROR_CLIENT caused by cancel)
-                                // NEVER restart recognizer while audio is playing from the speaker!
                                 if (isJarvisSpeaking || isComputing) {
                                     _isListening.value = false
                                     return
@@ -183,18 +499,13 @@ class VoiceInputManager(private val context: Context) {
                                         error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
 
                                 if (isPersistentMicLocked) {
-                                    // Calm debounced restart (600ms) to prevent audio loop clicking, chimes, and speaker feedback
                                     _isListening.value = true
                                     mainHandler.removeCallbacksAndMessages(null)
                                     mainHandler.postDelayed({
                                         if (isPersistentMicLocked && !isComputing && !isJarvisSpeaking) {
-                                            silenceSystemBeep(350L)
-                                            try {
-                                                speechRecognizer?.cancel()
-                                            } catch (_: Exception) {}
                                             launchRecognizerInternal()
                                         }
-                                    }, 600L)
+                                    }, 800L)
                                 } else {
                                     _isListening.value = false
                                     if (!isTransient && !isComputing) {
@@ -212,14 +523,12 @@ class VoiceInputManager(private val context: Context) {
                             }
 
                             override fun onPartialResults(partialResults: Bundle?) {
-                                if (isJarvisSpeaking || (System.currentTimeMillis() - lastSpeakingEndTimeMs) < 600L) {
+                                if (isJarvisSpeaking || (System.currentTimeMillis() - lastSpeakingEndTimeMs) < 650L) {
                                     return
                                 }
-
                                 val partialMatches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                                 val partialText = partialMatches?.firstOrNull()?.trim() ?: ""
                                 if (partialText.isBlank()) return
-
                                 _partialTranscript.value = partialText
                             }
 
@@ -227,14 +536,13 @@ class VoiceInputManager(private val context: Context) {
                                 _audioRmsDb.value = 0f
                                 _partialTranscript.value = ""
 
-                                // Acoustic speaker output guard: drop any audio picked up during or immediately after TTS playback
-                                if (isJarvisSpeaking || (System.currentTimeMillis() - lastSpeakingEndTimeMs) < 600L) {
+                                if (isJarvisSpeaking || (System.currentTimeMillis() - lastSpeakingEndTimeMs) < 650L) {
                                     if (isPersistentMicLocked && !isComputing && !isJarvisSpeaking) {
                                         mainHandler.postDelayed({
                                             if (isPersistentMicLocked && !isComputing && !isJarvisSpeaking) {
                                                 launchRecognizerInternal()
                                             }
-                                        }, 600L)
+                                        }, 700L)
                                     }
                                     return
                                 }
@@ -250,15 +558,13 @@ class VoiceInputManager(private val context: Context) {
                                     }
                                 }
 
-                                // If empty or self-echo, re-arm receptor smoothly and calmly after 600ms
                                 if (isPersistentMicLocked && !isComputing && !isJarvisSpeaking) {
                                     _isListening.value = true
-                                    silenceSystemBeep(350L)
                                     mainHandler.postDelayed({
                                         if (isPersistentMicLocked && !isComputing && !isJarvisSpeaking) {
                                             launchRecognizerInternal()
                                         }
-                                    }, 600L)
+                                    }, 700L)
                                 } else {
                                     _isListening.value = false
                                 }
@@ -274,13 +580,11 @@ class VoiceInputManager(private val context: Context) {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, currentLanguageCode)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, currentLanguageCode)
                     putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(currentLanguageCode))
-                    // Enable partial results so barge-in interrupts JARVIS within ~150ms of the user speaking
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                    // Ultra-low latency end-of-speech silence thresholds for rapid voice response
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 650L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 280L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 900L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
+                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 300L)
                 }
                 speechRecognizer?.startListening(intent)
             } catch (e: Exception) {
@@ -296,61 +600,13 @@ class VoiceInputManager(private val context: Context) {
     }
 
     /**
-     * Completely silences the system start and stop chime/beep of Android's SpeechRecognizer.
-     * Mutes STREAM_SYSTEM without triggering SecurityException.
-     */
-    private fun silenceSystemBeep(durationMs: Long = 350L) {
-        val am = audioManager ?: return
-        try {
-            if (!isMutedForBeep) {
-                if (savedSystemVolume == -1) {
-                    savedSystemVolume = am.getStreamVolume(AudioManager.STREAM_SYSTEM)
-                }
-                isMutedForBeep = true
-            }
-            try {
-                am.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0)
-            } catch (_: Exception) {}
-            try {
-                am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
-            } catch (_: Exception) {}
-
-            mainHandler.removeCallbacks(restoreAudioRunnable)
-            mainHandler.postDelayed(restoreAudioRunnable, durationMs)
-        } catch (_: Exception) {}
-    }
-
-    private val restoreAudioRunnable = Runnable {
-        restoreSystemAudio()
-    }
-
-    private fun restoreSystemAudio() {
-        val am = audioManager ?: return
-        try {
-            if (isMutedForBeep) {
-                try {
-                    am.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
-                } catch (_: Exception) {}
-                if (savedSystemVolume >= 0) {
-                    try {
-                        am.setStreamVolume(AudioManager.STREAM_SYSTEM, savedSystemVolume, 0)
-                    } catch (_: Exception) {}
-                    savedSystemVolume = -1
-                }
-                isMutedForBeep = false
-            }
-        } catch (_: Exception) {}
-    }
-
-    /**
-     * Distinguishes genuine operator barge-in speech from acoustic speaker echo of JARVIS's own voice.
+     * Distinguishes genuine operator speech from acoustic speaker echo of JARVIS's own voice.
      */
     private fun isLikelyEcho(input: String, reference: String): Boolean {
         val cleanInput = input.lowercase(Locale.ROOT).trim()
         if (cleanInput.isBlank()) return true
 
         val inputWords = cleanInput.split(Regex("\\s+")).filter { it.isNotBlank() }
-        // If user says an explicit interrupt keyword ("stop", "wait", "jarvis", "listen", etc.), NEVER treat as echo
         if (inputWords.any { it in explicitBargeInKeywords }) {
             return false
         }
@@ -358,7 +614,6 @@ class VoiceInputManager(private val context: Context) {
         if (reference.isBlank()) return false
         val cleanRef = reference.lowercase(Locale.ROOT)
 
-        // Direct phrase echo check
         if (cleanInput.length >= 6 && cleanRef.contains(cleanInput)) {
             return true
         }
@@ -399,14 +654,22 @@ class VoiceInputManager(private val context: Context) {
         lastSpeakingEndTimeMs = System.currentTimeMillis()
         mainHandler.removeCallbacksAndMessages(null)
         if (isPersistentMicLocked) {
-            // Anti-echo acoustic buffer: Wait 600ms after TTS finishes to let speaker sound dissipate completely!
+            // If silent AudioRecord loop is already active, it automatically un-gates after 650ms with ZERO beep!
+            if (continuousRecordJob?.isActive == true) {
+                mainHandler.postDelayed({
+                    if (isPersistentMicLocked && !isComputing && !isJarvisSpeaking) {
+                        _isListening.value = true
+                    }
+                }, 650L)
+                return
+            }
+
             mainHandler.postDelayed({
                 if (isPersistentMicLocked && !isComputing && !isJarvisSpeaking) {
                     _isListening.value = true
-                    silenceSystemBeep(350L)
                     launchRecognizerInternal()
                 }
-            }, 600L)
+            }, 650L)
         }
     }
 
@@ -421,6 +684,9 @@ class VoiceInputManager(private val context: Context) {
         isJarvisSpeaking = false
         isPersistentMicLocked = false
         mainHandler.removeCallbacksAndMessages(null)
+        continuousRecordJob?.cancel()
+        continuousRecordJob = null
+        releaseSilentRecorder()
         try {
             speechRecognizer?.stopListening()
             speechRecognizer?.cancel()

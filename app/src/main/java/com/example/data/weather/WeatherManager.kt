@@ -1,18 +1,84 @@
 package com.example.data.weather
 
+import com.squareup.moshi.Json
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONObject
-import java.net.URLEncoder
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.Query
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
+
+/**
+ * Retrofit DTOs for Open-Meteo Forecast & Geocoding APIs.
+ */
+data class OpenMeteoCurrentDto(
+    @Json(name = "temperature_2m") val temperature2m: Double? = null,
+    @Json(name = "relative_humidity_2m") val relativeHumidity2m: Int? = null,
+    @Json(name = "apparent_temperature") val apparentTemperature: Double? = null,
+    @Json(name = "weather_code") val weatherCode: Int? = null,
+    @Json(name = "wind_speed_10m") val windSpeed10m: Double? = null
+)
+
+data class OpenMeteoDailyDto(
+    @Json(name = "temperature_2m_max") val temperature2mMax: List<Double>? = null,
+    @Json(name = "temperature_2m_min") val temperature2mMin: List<Double>? = null
+)
+
+data class OpenMeteoForecastResponseDto(
+    @Json(name = "latitude") val latitude: Double? = null,
+    @Json(name = "longitude") val longitude: Double? = null,
+    @Json(name = "current") val current: OpenMeteoCurrentDto? = null,
+    @Json(name = "daily") val daily: OpenMeteoDailyDto? = null
+)
+
+data class OpenMeteoGeoResultDto(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "latitude") val latitude: Double? = null,
+    @Json(name = "longitude") val longitude: Double? = null,
+    @Json(name = "country") val country: String? = null
+)
+
+data class OpenMeteoGeocodingResponseDto(
+    @Json(name = "results") val results: List<OpenMeteoGeoResultDto>? = null
+)
+
+/**
+ * Retrofit Network Service Interface for fetching real-time weather data by GPS coordinates.
+ */
+interface WeatherRetrofitApiService {
+    @GET("v1/forecast")
+    suspend fun getForecastByCoordinates(
+        @Query("latitude") latitude: Double,
+        @Query("longitude") longitude: Double,
+        @Query("current") current: String = "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+        @Query("daily") daily: String = "temperature_2m_max,temperature_2m_min",
+        @Query("timezone") timezone: String = "auto"
+    ): OpenMeteoForecastResponseDto
+}
+
+/**
+ * Retrofit Network Service Interface for worldwide city geocoding.
+ */
+interface WeatherGeocodingRetrofitService {
+    @GET("v1/search")
+    suspend fun searchCity(
+        @Query("name") name: String,
+        @Query("count") count: Int = 1,
+        @Query("language") language: String = "en",
+        @Query("format") format: String = "json"
+    ): OpenMeteoGeocodingResponseDto
+}
 
 data class LiveWeatherData(
     val temperature: Int = 25,
@@ -22,7 +88,10 @@ data class LiveWeatherData(
     val high: Int = 28,
     val low: Int = 20,
     val humidity: Int = 55,
+    val windSpeedKmh: Int = 10,
     val weatherCode: Int = 0,
+    val latitude: Double = 28.6139,
+    val longitude: Double = 77.2090,
     val lastUpdatedMillis: Long = System.currentTimeMillis(),
     val isLive: Boolean = true,
     val isCached: Boolean = false,
@@ -44,6 +113,28 @@ class WeatherManager {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
+    private val moshi: Moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+
+    private val forecastRetrofit: Retrofit = Retrofit.Builder()
+        .baseUrl("https://api.open-meteo.com/")
+        .client(httpClient)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+
+    private val geocodingRetrofit: Retrofit = Retrofit.Builder()
+        .baseUrl("https://geocoding-api.open-meteo.com/")
+        .client(httpClient)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+
+    val weatherApiService: WeatherRetrofitApiService =
+        forecastRetrofit.create(WeatherRetrofitApiService::class.java)
+
+    val geocodingApiService: WeatherGeocodingRetrofitService =
+        geocodingRetrofit.create(WeatherGeocodingRetrofitService::class.java)
+
     private val _weatherState = MutableStateFlow(LiveWeatherData())
     val weatherState: StateFlow<LiveWeatherData> = _weatherState.asStateFlow()
 
@@ -52,25 +143,17 @@ class WeatherManager {
         if (cleanName.isBlank()) return@withContext refreshWeather()
 
         try {
-            // Query Open-Meteo Geocoding API for city coordinates worldwide
-            val encodedCity = URLEncoder.encode(cleanName, "UTF-8")
-            val geoUrl = "https://geocoding-api.open-meteo.com/v1/search?name=$encodedCity&count=1&language=en&format=json"
-            val geoReq = Request.Builder().url(geoUrl).build()
-            val geoResp = httpClient.newCall(geoReq).execute()
-            val geoBody = geoResp.body?.string() ?: ""
-
-            if (geoResp.isSuccessful && geoBody.isNotBlank()) {
-                val geoJson = JSONObject(geoBody)
-                val results = geoJson.optJSONArray("results")
-                if (results != null && results.length() > 0) {
-                    val first = results.getJSONObject(0)
-                    val lat = first.optDouble("latitude", 28.6139)
-                    val lon = first.optDouble("longitude", 77.2090)
-                    val resolvedName = first.optString("name", cleanName)
-                    val country = first.optString("country", "")
-                    val label = if (country.isNotBlank()) "$resolvedName, $country" else resolvedName
-                    return@withContext refreshWeather(lat, lon, label)
-                }
+            val geoResp = geocodingApiService.searchCity(name = cleanName)
+            val first = geoResp.results?.firstOrNull()
+            if (first != null && first.latitude != null && first.longitude != null) {
+                val resolvedName = first.name?.takeIf { it.isNotBlank() } ?: cleanName
+                val country = first.country.orEmpty()
+                val label = if (country.isNotBlank()) "$resolvedName, $country" else resolvedName
+                return@withContext refreshWeather(
+                    lat = first.latitude,
+                    lon = first.longitude,
+                    cityName = label
+                )
             }
         } catch (e: Exception) {
             val cached = _weatherState.value.copy(
@@ -85,31 +168,31 @@ class WeatherManager {
         refreshWeather(cityName = cleanName)
     }
 
+    /**
+     * Fetches real-time meteorological telemetry for the user's current GPS coordinates via Retrofit.
+     */
     suspend fun refreshWeather(
         lat: Double = 28.6139,
         lon: Double = 77.2090,
         cityName: String = "Central Core"
     ): LiveWeatherData = withContext(Dispatchers.IO) {
         try {
-            val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto"
-            val request = Request.Builder().url(url).build()
-            val response = httpClient.newCall(request).execute()
-            val body = response.body?.string() ?: ""
+            val response = weatherApiService.getForecastByCoordinates(
+                latitude = lat,
+                longitude = lon
+            )
+            val current = response.current
+            val daily = response.daily
 
-            if (response.isSuccessful && body.isNotBlank()) {
-                val json = JSONObject(body)
-                val current = json.optJSONObject("current")
-                val daily = json.optJSONObject("daily")
+            if (current != null) {
+                val temp = current.temperature2m?.roundToInt() ?: 25
+                val feels = current.apparentTemperature?.roundToInt() ?: temp
+                val humidity = current.relativeHumidity2m ?: 55
+                val windSpeed = current.windSpeed10m?.roundToInt() ?: 10
+                val code = current.weatherCode ?: 0
 
-                val temp = current?.optDouble("temperature_2m", 25.0)?.toInt() ?: 25
-                val feels = current?.optDouble("apparent_temperature", 26.0)?.toInt() ?: 26
-                val humidity = current?.optInt("relative_humidity_2m", 55) ?: 55
-                val code = current?.optInt("weather_code", 0) ?: 0
-
-                val maxArr = daily?.optJSONArray("temperature_2m_max")
-                val minArr = daily?.optJSONArray("temperature_2m_min")
-                val high = if (maxArr != null && maxArr.length() > 0) maxArr.optDouble(0, 28.0).toInt() else 28
-                val low = if (minArr != null && minArr.length() > 0) minArr.optDouble(0, 20.0).toInt() else 20
+                val high = daily?.temperature2mMax?.firstOrNull()?.roundToInt() ?: (temp + 3)
+                val low = daily?.temperature2mMin?.firstOrNull()?.roundToInt() ?: (temp - 4)
 
                 val conditionText = when (code) {
                     0 -> "Clear Sky"
@@ -131,7 +214,10 @@ class WeatherManager {
                     high = high,
                     low = low,
                     humidity = humidity,
+                    windSpeedKmh = windSpeed,
                     weatherCode = code,
+                    latitude = lat,
+                    longitude = lon,
                     lastUpdatedMillis = System.currentTimeMillis(),
                     isLive = true,
                     isCached = false,
@@ -143,6 +229,8 @@ class WeatherManager {
         } catch (e: Exception) {
             val current = _weatherState.value
             val cachedData = current.copy(
+                latitude = lat,
+                longitude = lon,
                 isLive = false,
                 isCached = true,
                 errorMessage = "Network error: Unable to reach weather service."
@@ -159,7 +247,10 @@ class WeatherManager {
             high = 28,
             low = 20,
             humidity = 55,
+            windSpeedKmh = 8,
             weatherCode = 0,
+            latitude = lat,
+            longitude = lon,
             lastUpdatedMillis = System.currentTimeMillis(),
             isLive = false,
             isCached = true,

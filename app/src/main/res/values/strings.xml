@@ -16,4 +16,7 @@
     <string name="accessibility_service_description">Enables hands-free screen reading, vision telemetry, and automatic task execution across apps.</string>
     <string name="notification_channel_name">JARVIS Neural Core Service</string>
     <string name="notification_channel_desc">Maintains persistent background voice receptors and automated tactical intelligence.</string>
+    <string name="default_web_client_id" translatable="false">540328273890-jarvisclient</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="sign_out">Sign Out</string>
 </resources>

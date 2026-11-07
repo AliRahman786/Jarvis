@@ -26,7 +26,9 @@ import com.example.ai.OpenAiProvider
 import com.example.ai.ToolCallRequest
 import com.example.ai.ToolDefinition
 import com.example.ai.ToolParameter
+import com.example.auth.JarvisAuthManager
 import com.example.data.location.DeviceLocationManager
+import com.example.data.location.LocationRepository
 import com.example.data.location.LocationStatus
 import com.example.automation.DeviceActionController
 import com.example.automation.JarvisAccessibilityService
@@ -55,7 +57,9 @@ import com.example.ui.theme.ThemeSolarOrange
 import com.example.voice.VoiceInputManager
 import com.example.voice.VoiceOutputManager
 import com.example.voice.VoiceState
+import com.google.android.gms.maps.model.LatLng
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -83,6 +87,11 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     val conversationRepo = ConversationRepository(db.conversationDao())
     val batteryObserver = SystemBatteryObserver(application, prefs)
     val batteryPowerState: StateFlow<BatteryPowerState> = batteryObserver.powerStateFlow
+
+    val authManager = JarvisAuthManager()
+    val locationRepository = LocationRepository(application)
+    val liveUserGpsLocation: StateFlow<LatLng?> = locationRepository.currentGpsLocation
+    private var gpsTrackingJob: Job? = null
 
     val voiceInputManager = VoiceInputManager(application)
     val voiceOutputManager = VoiceOutputManager(application)
@@ -182,6 +191,9 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _activePlace = MutableStateFlow<PlaceLocation?>(null)
     val activePlace: StateFlow<PlaceLocation?> = _activePlace.asStateFlow()
+
+    private val _searchResultPlaces = MutableStateFlow<List<PlaceLocation>>(emptyList())
+    val searchResultPlaces: StateFlow<List<PlaceLocation>> = _searchResultPlaces.asStateFlow()
 
     private var pendingVoiceQueryAfterCapture: String? = null
 
@@ -334,8 +346,35 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         )
     )
 
+    private fun resolveEffectiveGeminiKey(): String {
+        val storedKey = prefs.getApiKeyForProvider("GEMINI").trim()
+        if (storedKey.isNotBlank() && storedKey != "PLACEHOLDER_GEMINI_API_KEY") return storedKey
+        val buildConfigGeminiKey = try {
+            com.example.BuildConfig.GEMINI_API_KEY.trim()
+        } catch (_: Exception) { "" }
+        if (buildConfigGeminiKey.isNotBlank() && buildConfigGeminiKey != "PLACEHOLDER_GEMINI_API_KEY") {
+            return buildConfigGeminiKey
+        }
+        return ""
+    }
+
     init {
         batteryObserver.start()
+
+        // Configure zero-beep continuous AudioRecord + VAD transcription (Gemini Live / ChatGPT style)
+        voiceInputManager.canUseSilentContinuousRecorder = {
+            resolveEffectiveGeminiKey().isNotBlank()
+        }
+        voiceInputManager.cloudAudioTranscriber = { wavBytes, langCode ->
+            val key = resolveEffectiveGeminiKey()
+            val model = prefs.getGeminiModel()
+            geminiProvider.transcribeAudioWav(
+                wavBytes = wavBytes,
+                languageCode = langCode,
+                apiKey = key,
+                preferredModel = model
+            )
+        }
 
         // Synchronize accurate user location and live weather on startup
         viewModelScope.launch {
@@ -347,7 +386,9 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             _mapLongitude.value = userLon
             weatherManager.refreshWeather(lat = userLat, lon = userLon, cityName = userCity)
 
-            if (!prefs.isLocationConfigured()) {
+            if (locationRepository.hasLocationPermission()) {
+                startRealtimeGpsAndWeatherTracking()
+            } else if (!prefs.isLocationConfigured()) {
                 _showLocationModal.value = true
                 speakVoice("Ali Rahman, please confirm your current location so I can calibrate your in-built tactical Google map and live weather forecast.")
             }
@@ -533,6 +574,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                     val precisionLabel = if (loc.isPrecise) "PRECISE GPS LOCK" else "APPROXIMATE POSITION"
                     _statusText.value = "$precisionLabel // ${place.name}"
                     updateUserLocation(place.name, lat, lon)
+                    startRealtimeGpsAndWeatherTracking()
                     onComplete?.invoke(place.name)
                 }
                 is LocationStatus.LocationServicesDisabled -> {
@@ -554,9 +596,33 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun startRealtimeGpsAndWeatherTracking() {
+        if (!locationRepository.hasLocationPermission()) return
+        locationRepository.startRealtimeTracking(
+            scope = viewModelScope,
+            intervalMillis = 10_000L,
+            onLocationUpdate = { latLng ->
+                onUserGpsLocationUpdated(latLng)
+            }
+        )
+    }
+
+    fun onUserGpsLocationUpdated(latLng: LatLng) {
+        viewModelScope.launch {
+            _mapLatitude.value = latLng.latitude
+            _mapLongitude.value = latLng.longitude
+            weatherManager.refreshWeather(
+                lat = latLng.latitude,
+                lon = latLng.longitude,
+                cityName = _mapCity.value
+            )
+        }
+    }
+
     fun clearTacticalRoute() {
         _activeRoute.value = null
         _activePlace.value = null
+        _searchResultPlaces.value = emptyList()
         _statusText.value = "TACTICAL VECTOR CLEARED"
     }
 
@@ -580,6 +646,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             val route = GoogleMapsAgentEngine.calculateRoute(orig, cleanDest, mode)
             _activeRoute.value = route
             _activePlace.value = null
+            _searchResultPlaces.value = emptyList()
             _mapCity.value = "${route.originName} ➔ ${route.destName}"
             _mapLatitude.value = route.startLat
             _mapLongitude.value = route.startLon
@@ -623,6 +690,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             val place = GoogleMapsAgentEngine.geocode(cleanQuery)
             _activePlace.value = place
             _activeRoute.value = null
+            _searchResultPlaces.value = listOf(place)
             _mapCity.value = place.name
             _mapLatitude.value = place.latitude
             _mapLongitude.value = place.longitude
@@ -670,6 +738,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                 val first = places.first()
                 _activePlace.value = first
                 _activeRoute.value = null
+                _searchResultPlaces.value = places
                 _mapCity.value = first.name
                 _mapLatitude.value = first.latitude
                 _mapLongitude.value = first.longitude
@@ -2241,6 +2310,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                             val first = places.first()
                             _activePlace.value = first
                             _activeRoute.value = null
+                            _searchResultPlaces.value = places
                             _mapCity.value = first.name
                             _mapLatitude.value = first.latitude
                             _mapLongitude.value = first.longitude
@@ -2348,6 +2418,8 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     override fun onCleared() {
         super.onCleared()
         batteryObserver.stop()
+        locationRepository.stopRealtimeTracking()
+        authManager.cleanup()
         voiceInputManager.stopListening()
         voiceOutputManager.shutdown()
     }

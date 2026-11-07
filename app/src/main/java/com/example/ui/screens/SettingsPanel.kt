@@ -336,6 +336,14 @@ fun SettingsPanel(
             }
         }
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // A2. FIREBASE AUTHENTICATION & GOOGLE CREDENTIAL MANAGER CARD
+        OperatorAuthCard(
+            authManager = viewModel.authManager,
+            accentColor = accentColor
+        )
+
         Spacer(modifier = Modifier.height(16.dp))
 
         // SECTION 1: VOICE & NEURAL INTELLIGENCE

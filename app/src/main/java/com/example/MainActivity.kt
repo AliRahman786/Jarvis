@@ -98,8 +98,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     val permissions = mutableListOf(
                         Manifest.permission.RECORD_AUDIO,
                         Manifest.permission.CAMERA,
-                        Manifest.permission.READ_CONTACTS,
-                        Manifest.permission.CALL_PHONE,
                         Manifest.permission.ACCESS_FINE_LOCATION,
                         Manifest.permission.ACCESS_COARSE_LOCATION
                     )

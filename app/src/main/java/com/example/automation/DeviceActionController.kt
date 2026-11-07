@@ -147,7 +147,7 @@ object DeviceActionController {
     }
 
     /**
-     * Directive 7.3: Direct Phone Calling.
+     * Directive 7.3: Direct Phone Calling using standard safe Intent.ACTION_DIAL (zero Play Protect warning).
      */
     fun callContact(context: Context, nameOrNumber: String, memoryManager: MemoryManager): String {
         val phone = resolvePhoneNumber(context, nameOrNumber, memoryManager) ?: nameOrNumber.filter { it.isDigit() || it == '+' }
@@ -156,18 +156,13 @@ object DeviceActionController {
         }
 
         try {
-            val hasCallPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
-            val intent = if (hasCallPermission) {
-                Intent(Intent.ACTION_CALL, Uri.parse("tel:$phone"))
-            } else {
-                Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
-            }.apply {
+            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone")).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             context.startActivity(intent)
-            return "Initiating voice frequency call to $nameOrNumber ($phone)..."
+            return "Dialing phone frequency for $nameOrNumber ($phone)..."
         } catch (e: Exception) {
-            return "Call initiation error: ${e.localizedMessage}"
+            return "Call dialer error: ${e.localizedMessage}"
         }
     }
 

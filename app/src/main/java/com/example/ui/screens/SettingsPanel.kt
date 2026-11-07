@@ -1648,12 +1648,10 @@ fun SettingsPanel(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 PermissionRow(
-                    name = "Contacts & Calling",
-                    isGranted = hasContactsPermission && hasPhonePermission,
+                    name = "Safe Phone Dialer & Navigation",
+                    isGranted = true,
                     accentColor = accentColor,
-                    onGrant = {
-                        permissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE))
-                    }
+                    onGrant = { }
                 )
                 Spacer(modifier = Modifier.height(6.dp))
 

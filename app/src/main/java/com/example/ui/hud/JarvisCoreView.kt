@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -46,15 +47,11 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * Precomputed 3D node on a Fibonacci sphere for the *Avengers: Age of Ultron*
- * J.A.R.V.I.S. volumetric holographic Mind-Core lattice.
- */
 private data class MindCoreNode3D(
     val x: Float,
     val y: Float,
     val z: Float,
-    val layerScale: Float, // 1.0f = outer cortex, 0.62f = inner synaptic shell
+    val layerScale: Float,
     val isHubNode: Boolean
 )
 
@@ -68,17 +65,10 @@ private data class ProjectedNode(
 )
 
 /**
- * Movie-authentic *Avengers: Age of Ultron* (2015) J.A.R.V.I.S. 3D Holographic Mind-Core.
- *
- * Features:
- * 1. Dual-shell 3D Fibonacci Neural Cortex Lattice (68 3D nodes) with real-time 3D perspective
- *    projection, depth-sorted rendering, and glowing synaptic neural pathways.
- * 2. Authentic *Age of Ultron* dual-tone Holographic Gold/Amber (#FFE066 / #FF6D00) &
- *    Stark Quantum Cyan (#00E5FF) energy synthesis that shifts dynamically with [VoiceState].
- * 3. Three 3-axis tilted gyroscopic astrolabe rings with segmented telemetry arcs & data pips.
- * 4. 48-bar 360° Polar Audio Spectrum Equalizer around the perimeter reacting to [audioAmplitude]
- *    and full-duplex Barge-In voice interruption.
- * 5. Interactive 3D orbital rotation, pinch-to-zoom, and single-tap Barge-In / Mic trigger.
+ * Stark Mark-LIV 3D Triangular Arc Reactor & Holographic Pedestal Core.
+ * Preserves all 3D Fibonacci neural nodes, voice state colors, audio spectrum reactivity,
+ * and interactive pan/zoom/tap gestures while featuring the signature glowing triangular
+ * Arc Reactor core and multi-ring holographic emitter base from the HUD design.
  */
 @Composable
 fun JarvisCoreView(
@@ -92,50 +82,42 @@ fun JarvisCoreView(
     var rotationOffset by remember { mutableFloatStateOf(0f) }
     var tiltPitchOffset by remember { mutableFloatStateOf(0.25f) }
 
-    // Precompute 3D Fibonacci sphere neural lattice (48 outer cortex nodes + 20 inner core nodes)
     val mindLatticeNodes = remember {
-        val list = ArrayList<MindCoreNode3D>(68)
+        val list = ArrayList<MindCoreNode3D>(48)
         val goldenRatio = (1f + sqrt(5f)) / 2f
-        val outerCount = 48
+        val outerCount = 32
         for (i in 0 until outerCount) {
             val theta = 2f * PI.toFloat() * i / goldenRatio
             val phi = kotlin.math.acos(1f - 2f * (i + 0.5f) / outerCount)
-            val x = (sin(phi) * cos(theta))
-            val y = (sin(phi) * sin(theta))
-            val z = cos(phi)
             list.add(
                 MindCoreNode3D(
-                    x = x,
-                    y = y,
-                    z = z,
+                    x = sin(phi) * cos(theta),
+                    y = sin(phi) * sin(theta),
+                    z = cos(phi),
                     layerScale = 1.0f,
-                    isHubNode = (i % 5 == 0)
+                    isHubNode = (i % 4 == 0)
                 )
             )
         }
-        val innerCount = 20
+        val innerCount = 16
         for (i in 0 until innerCount) {
             val theta = 2f * PI.toFloat() * i / goldenRatio + 0.9f
             val phi = kotlin.math.acos(1f - 2f * (i + 0.5f) / innerCount)
-            val x = (sin(phi) * cos(theta))
-            val y = (sin(phi) * sin(theta))
-            val z = cos(phi)
             list.add(
                 MindCoreNode3D(
-                    x = x,
-                    y = y,
-                    z = z,
-                    layerScale = 0.62f,
-                    isHubNode = (i % 4 == 0)
+                    x = sin(phi) * cos(theta),
+                    y = sin(phi) * sin(theta),
+                    z = cos(phi),
+                    layerScale = 0.65f,
+                    isHubNode = (i % 3 == 0)
                 )
             )
         }
         list
     }
 
-    // Precompute synaptic edges between nearby 3D nodes
     val mindSynapseEdges = remember(mindLatticeNodes) {
-        val edges = ArrayList<Pair<Int, Int>>(160)
+        val edges = ArrayList<Pair<Int, Int>>(110)
         for (i in mindLatticeNodes.indices) {
             val a = mindLatticeNodes[i]
             val ax = a.x * a.layerScale
@@ -150,8 +132,7 @@ fun JarvisCoreView(
                 val dy = ay - by
                 val dz = az - bz
                 val distSq = dx * dx + dy * dy + dz * dz
-                // Connect close neighbors within a shell and radial bridges between inner/outer cortex
-                if (distSq in 0.08f..0.38f) {
+                if (distSq in 0.08f..0.40f) {
                     edges.add(i to j)
                 }
             }
@@ -159,7 +140,7 @@ fun JarvisCoreView(
         edges
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "ultron_jarvis_mind_core")
+    val infiniteTransition = rememberInfiniteTransition(label = "stark_arc_reactor_core")
 
     val primaryRotation by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -201,7 +182,7 @@ fun JarvisCoreView(
         initialValue = 0f,
         targetValue = (2f * PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2800, easing = LinearEasing),
+            animation = tween(durationMillis = 2600, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "synaptic_wave"
@@ -213,10 +194,10 @@ fun JarvisCoreView(
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = when (voiceState) {
-                    VoiceState.SPEAKING -> 480
-                    VoiceState.THINKING, VoiceState.PROCESSING -> 620
-                    VoiceState.LISTENING -> 850
-                    else -> 2100
+                    VoiceState.SPEAKING -> 460
+                    VoiceState.THINKING, VoiceState.PROCESSING -> 600
+                    VoiceState.LISTENING -> 820
+                    else -> 2000
                 },
                 easing = FastOutSlowInEasing
             ),
@@ -231,21 +212,24 @@ fun JarvisCoreView(
         label = "audio_amp"
     )
 
-    // Age of Ultron J.A.R.V.I.S. Mind-Core Palette:
-    // Combines Golden-Amber Synaptic Core with Tactical Cyan/State Accents
+    val cyanElectric = Color(0xFF00E5FF)
+    val deepBlueGlow = Color(0xFF0077FF)
+    val goldAccent = ArcAmberBright
+    val warmOrange = Color(0xFFFF8C00)
+
     val primaryCoreColor = when (voiceState) {
-        VoiceState.IDLE -> ArcAmberBright
+        VoiceState.IDLE -> cyanElectric
         VoiceState.LISTENING -> SuccessEmerald
-        VoiceState.THINKING, VoiceState.PROCESSING -> ArcAmberBright
-        VoiceState.SPEAKING -> ArcAmberBright
+        VoiceState.THINKING, VoiceState.PROCESSING -> goldAccent
+        VoiceState.SPEAKING -> cyanElectric
         VoiceState.ERROR -> AlertCrimson
     }
 
     val secondaryHologramColor = when (voiceState) {
-        VoiceState.IDLE -> accentColor
-        VoiceState.LISTENING -> ReactorCyanGlow
+        VoiceState.IDLE -> goldAccent
+        VoiceState.LISTENING -> cyanElectric
         VoiceState.THINKING, VoiceState.PROCESSING -> ProcessingViolet
-        VoiceState.SPEAKING -> ReactorCyanGlow
+        VoiceState.SPEAKING -> goldAccent
         VoiceState.ERROR -> ArcFlameOrange
     }
 
@@ -255,13 +239,11 @@ fun JarvisCoreView(
             .testTag("jarvis_3d_core")
             .semantics {
                 contentDescription =
-                    "JARVIS Age of Ultron 3D Mind Core in ${voiceState.name} state. Tap to speak or interrupt immediately."
+                    "JARVIS 3D Arc Reactor Mind Core in ${voiceState.name} state. Tap to speak or interrupt immediately."
             }
             .pointerInput(onCoreTap) {
                 if (onCoreTap != null) {
-                    detectTapGestures(
-                        onTap = { onCoreTap() }
-                    )
+                    detectTapGestures(onTap = { onCoreTap() })
                 }
             }
             .pointerInput(Unit) {
@@ -273,39 +255,63 @@ fun JarvisCoreView(
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val baseRadius = (min(size.width, size.height) / 2f) * 0.82f * scale
-            val dynamicPulse = 1f + (smoothedAmplitude * 0.22f)
+            // Position orb slightly above vertical center so the holographic pedestal base sits underneath
+            val orbCenter = Offset(size.width / 2f, size.height * 0.43f)
+            val baseRadius = (min(size.width, size.height * 0.82f) / 2f) * 0.78f * scale
+            val dynamicPulse = 1f + (smoothedAmplitude * 0.20f)
 
-            // 1. Deep Volumetric Holographic Aura (Gold + Cyan multi-stop radial field)
+            // 1. HOLOGRAPHIC PROJECTOR PEDESTAL BASE & VERTICAL ENERGY COLUMNS
+            drawHolographicPedestalBase(
+                orbCenter = orbCenter,
+                baseRadius = baseRadius,
+                canvasHeight = size.height,
+                primaryColor = primaryCoreColor,
+                goldColor = secondaryHologramColor,
+                wavePhase = synapticWavePhase,
+                breath = coreBreath
+            )
+
+            // 2. Deep Volumetric Holographic Aura behind the Reactor Sphere
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        primaryCoreColor.copy(alpha = 0.36f * coreBreath),
-                        secondaryHologramColor.copy(alpha = 0.18f),
-                        primaryCoreColor.copy(alpha = 0.06f),
+                        primaryCoreColor.copy(alpha = 0.42f * coreBreath),
+                        deepBlueGlow.copy(alpha = 0.24f),
+                        secondaryHologramColor.copy(alpha = 0.10f),
                         Color.Transparent
                     ),
-                    center = center,
-                    radius = baseRadius * 1.32f * dynamicPulse
+                    center = orbCenter,
+                    radius = baseRadius * 1.38f * dynamicPulse
                 ),
-                radius = baseRadius * 1.32f * dynamicPulse,
-                center = center
+                radius = baseRadius * 1.38f * dynamicPulse,
+                center = orbCenter
             )
 
-            // 2. Outer Degree Vernier Ring & Precision Compass Ticks
-            drawUltronPerimeterRing(
-                center = center,
-                radius = baseRadius * 1.02f,
-                rotation = primaryRotation * 0.35f + rotationOffset,
-                primaryColor = primaryCoreColor,
-                secondaryColor = secondaryHologramColor
+            // 3. Wide Horizontal Orbital Ring with Glowing Particle Nodes (wraps around the sphere)
+            drawHorizontalOrbitalRing(
+                center = orbCenter,
+                radiusX = baseRadius * 1.24f,
+                radiusY = baseRadius * 0.30f,
+                phase = synapticWavePhase,
+                cyanColor = primaryCoreColor,
+                goldColor = secondaryHologramColor
             )
 
-            // 3. 48-Bar 360° Polar Audio Spectrum Equalizer (Reacts to Voice & Barge-In)
+            // 4. Outer Mechanical Turbine Ring (Segmented Gold/Bronze + Cyan Armour Ring)
+            drawMechanicalTurbineRing(
+                center = orbCenter,
+                outerRadius = baseRadius * 0.98f,
+                innerRadius = baseRadius * 0.80f,
+                rotation = primaryRotation * 0.30f + rotationOffset,
+                cyanColor = primaryCoreColor,
+                goldColor = secondaryHologramColor,
+                orangeColor = warmOrange
+            )
+
+            // 5. 48-Bar Polar Audio Spectrum Equalizer
             drawPolarAudioSpectrumRing(
-                center = center,
-                innerRadius = baseRadius * 0.86f,
+                center = orbCenter,
+                innerRadius = baseRadius * 0.78f,
                 amplitude = smoothedAmplitude,
                 phase = synapticWavePhase,
                 state = voiceState,
@@ -313,48 +319,38 @@ fun JarvisCoreView(
                 secondaryColor = secondaryHologramColor
             )
 
-            // 4. Counter-Rotating Segmented Telemetry Astrolabe Arcs
-            rotate(degrees = secondaryRotation + rotationOffset, pivot = center) {
-                val ringRadius = baseRadius * 0.80f
-                val arcSpan = listOf(58f, 32f, 74f, 28f, 52f, 36f)
+            // 6. Counter-Rotating Segmented Telemetry Astrolabe Arcs
+            rotate(degrees = secondaryRotation + rotationOffset, pivot = orbCenter) {
+                val ringRadius = baseRadius * 0.72f
+                val arcSpan = listOf(46f, 24f, 52f, 22f, 44f, 28f)
                 var angleCursor = 0f
                 arcSpan.forEachIndexed { idx, sweep ->
                     drawArc(
                         color = if (idx % 2 == 0) {
-                            primaryCoreColor.copy(alpha = 0.72f)
+                            secondaryHologramColor.copy(alpha = 0.85f)
                         } else {
-                            secondaryHologramColor.copy(alpha = 0.65f)
+                            primaryCoreColor.copy(alpha = 0.80f)
                         },
                         startAngle = angleCursor,
                         sweepAngle = sweep,
                         useCenter = false,
-                        topLeft = Offset(center.x - ringRadius, center.y - ringRadius),
+                        topLeft = Offset(orbCenter.x - ringRadius, orbCenter.y - ringRadius),
                         size = Size(ringRadius * 2f, ringRadius * 2f),
                         style = Stroke(
-                            width = if (idx % 2 == 0) 4.2f else 2.2f,
+                            width = if (idx % 2 == 0) 5.0f else 2.6f,
                             cap = StrokeCap.Round
                         )
                     )
-                    angleCursor += sweep + 20f
+                    angleCursor += sweep + 24f
                 }
             }
 
-            // 5. Three 3-Axis Perspective Tilted Gyroscopic Rings
-            draw3DGyroscopicRings(
-                center = center,
-                radius = baseRadius * 0.72f * dynamicPulse,
-                spinDeg = primaryRotation + rotationOffset,
-                counterSpinDeg = secondaryRotation,
-                primaryColor = primaryCoreColor,
-                secondaryColor = secondaryHologramColor
-            )
-
-            // 6. 3D Volumetric Fibonacci Neural Lattice (Age of Ultron Mind-Core Sphere)
+            // 7. 3D Volumetric Fibonacci Neural Lattice
             val yawRad = ((primaryRotation * 0.85f + rotationOffset) * PI / 180.0).toFloat()
             val pitchRad = tiltPitchOffset + 0.22f * sin(synapticWavePhase * 0.5f)
             drawAgeOfUltronMindLattice3D(
-                center = center,
-                sphereRadius = baseRadius * 0.58f * coreBreath * (1f + smoothedAmplitude * 0.14f),
+                center = orbCenter,
+                sphereRadius = baseRadius * 0.56f * coreBreath * (1f + smoothedAmplitude * 0.14f),
                 nodes = mindLatticeNodes,
                 edges = mindSynapseEdges,
                 yawRad = yawRad,
@@ -365,44 +361,17 @@ fun JarvisCoreView(
                 secondaryColor = secondaryHologramColor
             )
 
-            // 7. Inner Quantum Singularity Nucleus & Hexagonal Containment Matrix
-            val nucleusRadius = baseRadius * 0.21f * coreBreath * (1f + smoothedAmplitude * 0.30f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0.96f),
-                        primaryCoreColor.copy(alpha = 0.88f),
-                        secondaryHologramColor.copy(alpha = 0.45f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = nucleusRadius * 1.85f
-                ),
-                radius = nucleusRadius * 1.85f,
-                center = center
+            // 8. ICONIC STARK MARK-LIV TRIANGULAR ARC REACTOR CORE (Centerpiece)
+            drawTriangularArcReactorCore(
+                center = orbCenter,
+                coreRadius = baseRadius * 0.50f * coreBreath * (1f + smoothedAmplitude * 0.12f),
+                cyanColor = primaryCoreColor,
+                goldColor = secondaryHologramColor
             )
 
-            // Rotating inner dual-geometry containment core
-            rotate(degrees = -secondaryRotation * 1.4f, pivot = center) {
-                val hexPath = createPolygonPath(center, nucleusRadius * 1.05f, sides = 6)
-                drawPath(
-                    path = hexPath,
-                    color = Color.White.copy(alpha = 0.82f),
-                    style = Stroke(width = 2.4f)
-                )
-            }
-            rotate(degrees = primaryRotation * 1.8f, pivot = center) {
-                val octPath = createPolygonPath(center, nucleusRadius * 0.72f, sides = 8)
-                drawPath(
-                    path = octPath,
-                    color = primaryCoreColor.copy(alpha = 0.9f),
-                    style = Stroke(width = 1.8f)
-                )
-            }
-
-            // 8. State-Specific Holographic Telemetry Overlay (Listening Barge-In / Thinking / Speaking)
+            // 9. State-Specific Holographic Overlay
             drawStateSpecificHoloprojector(
-                center = center,
+                center = orbCenter,
                 baseRadius = baseRadius,
                 state = voiceState,
                 amplitude = smoothedAmplitude,
@@ -415,39 +384,278 @@ fun JarvisCoreView(
     }
 }
 
-private fun DrawScope.drawUltronPerimeterRing(
-    center: Offset,
-    radius: Float,
-    rotation: Float,
+private fun DrawScope.drawHolographicPedestalBase(
+    orbCenter: Offset,
+    baseRadius: Float,
+    canvasHeight: Float,
     primaryColor: Color,
-    secondaryColor: Color
+    goldColor: Color,
+    wavePhase: Float,
+    breath: Float
 ) {
+    val pedestalY = (orbCenter.y + baseRadius * 1.18f).coerceAtMost(canvasHeight * 0.89f)
+    val pedestalWidth = baseRadius * 1.95f
+    val pedestalHeight = baseRadius * 0.36f
+
+    // Vertical holographic light beam column from pedestal up into the core
+    val beamWidth = baseRadius * 0.54f
+    drawRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                primaryColor.copy(alpha = 0.05f),
+                primaryColor.copy(alpha = 0.36f * breath),
+                Color.White.copy(alpha = 0.55f * breath),
+                primaryColor.copy(alpha = 0.12f)
+            ),
+            startY = orbCenter.y + baseRadius * 0.25f,
+            endY = pedestalY
+        ),
+        topLeft = Offset(orbCenter.x - beamWidth / 2f, orbCenter.y + baseRadius * 0.25f),
+        size = Size(beamWidth, (pedestalY - (orbCenter.y + baseRadius * 0.25f)).coerceAtLeast(8f))
+    )
+
+    // Vertical laser filaments inside the beam
+    val lineCount = 9
+    for (i in 0 until lineCount) {
+        val frac = (i.toFloat() / (lineCount - 1)) - 0.5f
+        val xPos = orbCenter.x + frac * beamWidth * 0.9f
+        val alpha = (1f - abs(frac) * 1.6f).coerceIn(0.15f, 0.85f)
+        drawLine(
+            color = if (i % 2 == 0) Color.White.copy(alpha = alpha * 0.7f) else primaryColor.copy(alpha = alpha),
+            start = Offset(xPos, orbCenter.y + baseRadius * 0.42f),
+            end = Offset(xPos, pedestalY),
+            strokeWidth = if (i == lineCount / 2) 2.6f else 1.2f
+        )
+    }
+
+    // Concentric 3D perspective emitter ellipses on the pedestal platform
+    val rings = listOf(1.0f, 0.82f, 0.64f, 0.45f, 0.26f)
+    rings.forEachIndexed { idx, factor ->
+        val w = pedestalWidth * factor
+        val h = pedestalHeight * factor
+        val ringColor = if (idx % 2 == 0) primaryColor else goldColor
+        drawOval(
+            color = ringColor.copy(alpha = if (idx == 0) 0.55f else 0.78f),
+            topLeft = Offset(orbCenter.x - w / 2f, pedestalY - h / 2f),
+            size = Size(w, h),
+            style = Stroke(width = if (idx == 1 || idx == 2) 3.2f else 1.8f)
+        )
+    }
+
+    // Bright core emitter hotspot on pedestal center
+    drawOval(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.9f),
+                primaryColor.copy(alpha = 0.65f),
+                Color.Transparent
+            ),
+            center = Offset(orbCenter.x, pedestalY),
+            radius = pedestalWidth * 0.35f
+        ),
+        topLeft = Offset(orbCenter.x - pedestalWidth * 0.32f, pedestalY - pedestalHeight * 0.32f),
+        size = Size(pedestalWidth * 0.64f, pedestalHeight * 0.64f)
+    )
+}
+
+private fun DrawScope.drawHorizontalOrbitalRing(
+    center: Offset,
+    radiusX: Float,
+    radiusY: Float,
+    phase: Float,
+    cyanColor: Color,
+    goldColor: Color
+) {
+    drawOval(
+        color = cyanColor.copy(alpha = 0.55f),
+        topLeft = Offset(center.x - radiusX, center.y - radiusY),
+        size = Size(radiusX * 2f, radiusY * 2f),
+        style = Stroke(width = 2.0f)
+    )
+    drawOval(
+        color = goldColor.copy(alpha = 0.28f),
+        topLeft = Offset(center.x - radiusX * 1.04f, center.y - radiusY * 1.12f),
+        size = Size(radiusX * 2.08f, radiusY * 2.24f),
+        style = Stroke(width = 1.1f)
+    )
+
+    // Orbiting bright energy sparkles along the ellipse
+    for (i in 0 until 6) {
+        val angle = phase + i * (PI.toFloat() / 3f)
+        val px = center.x + radiusX * cos(angle)
+        val py = center.y + radiusY * sin(angle)
+        drawCircle(
+            color = Color.White.copy(alpha = 0.9f),
+            radius = 3.2f,
+            center = Offset(px, py)
+        )
+        drawCircle(
+            color = cyanColor.copy(alpha = 0.45f),
+            radius = 7.5f,
+            center = Offset(px, py)
+        )
+    }
+}
+
+private fun DrawScope.drawMechanicalTurbineRing(
+    center: Offset,
+    outerRadius: Float,
+    innerRadius: Float,
+    rotation: Float,
+    cyanColor: Color,
+    goldColor: Color,
+    orangeColor: Color
+) {
+    // Dark metallic backing ring
+    drawCircle(
+        color = Color(0xFF050D1A).copy(alpha = 0.78f),
+        radius = (outerRadius + innerRadius) * 0.5f,
+        center = center,
+        style = Stroke(width = outerRadius - innerRadius)
+    )
+
+    // Outer & inner glowing rims
+    drawCircle(
+        color = cyanColor.copy(alpha = 0.85f),
+        radius = outerRadius,
+        center = center,
+        style = Stroke(width = 2.5f)
+    )
+    drawCircle(
+        color = goldColor.copy(alpha = 0.75f),
+        radius = innerRadius,
+        center = center,
+        style = Stroke(width = 2.2f)
+    )
+
+    // Segmented turbine ribs & glowing amber/cyan reactor cells
     rotate(degrees = rotation, pivot = center) {
-        val tickCount = 72
-        for (i in 0 until tickCount) {
-            val angleDeg = i * (360f / tickCount)
-            val rad = (angleDeg * PI / 180.0).toFloat()
-            val isCardinal = i % 18 == 0
-            val isMajor = i % 6 == 0
-            val innerR = when {
-                isCardinal -> radius * 0.90f
-                isMajor -> radius * 0.94f
-                else -> radius * 0.97f
+        val segmentCount = 24
+        val sweepPerSegment = 360f / segmentCount
+        val midRadius = (outerRadius + innerRadius) * 0.5f
+        val ringThickness = (outerRadius - innerRadius) * 0.68f
+
+        for (i in 0 until segmentCount) {
+            val startAngle = i * sweepPerSegment + 2f
+            val isGoldCell = i % 3 == 0
+            val cellColor = when {
+                isGoldCell -> orangeColor.copy(alpha = 0.82f)
+                i % 2 == 0 -> cyanColor.copy(alpha = 0.55f)
+                else -> goldColor.copy(alpha = 0.45f)
             }
-            val outerR = if (isCardinal) radius * 1.03f else radius
-            val tickColor = when {
-                isCardinal -> primaryColor.copy(alpha = 0.92f)
-                isMajor -> secondaryColor.copy(alpha = 0.65f)
-                else -> primaryColor.copy(alpha = 0.30f)
-            }
-            drawLine(
-                color = tickColor,
-                start = Offset(center.x + innerR * cos(rad), center.y + innerR * sin(rad)),
-                end = Offset(center.x + outerR * cos(rad), center.y + outerR * sin(rad)),
-                strokeWidth = if (isCardinal) 3.2f else if (isMajor) 2f else 1.1f,
-                cap = StrokeCap.Round
+            drawArc(
+                color = cellColor,
+                startAngle = startAngle,
+                sweepAngle = sweepPerSegment - 4.5f,
+                useCenter = false,
+                topLeft = Offset(center.x - midRadius, center.y - midRadius),
+                size = Size(midRadius * 2f, midRadius * 2f),
+                style = Stroke(width = ringThickness, cap = StrokeCap.Butt)
             )
         }
+    }
+}
+
+private fun DrawScope.drawTriangularArcReactorCore(
+    center: Offset,
+    coreRadius: Float,
+    cyanColor: Color,
+    goldColor: Color
+) {
+    // Downward-pointing iconic Iron Man Mark-VI / Mark-LIV Arc Reactor Triangle
+    val anglesDeg = listOf(-30f, 90f, 210f)
+    val outerVertices = anglesDeg.map { deg ->
+        val rad = (deg * PI / 180.0).toFloat()
+        Offset(
+            x = center.x + coreRadius * cos(rad),
+            y = center.y + coreRadius * sin(rad)
+        )
+    }
+
+    val innerVertices = anglesDeg.map { deg ->
+        val rad = (deg * PI / 180.0).toFloat()
+        Offset(
+            x = center.x + coreRadius * 0.58f * cos(rad),
+            y = center.y + coreRadius * 0.58f * sin(rad)
+        )
+    }
+
+    val outerTriangle = Path().apply {
+        moveTo(outerVertices[0].x, outerVertices[0].y)
+        lineTo(outerVertices[1].x, outerVertices[1].y)
+        lineTo(outerVertices[2].x, outerVertices[2].y)
+        close()
+    }
+
+    val innerTriangle = Path().apply {
+        moveTo(innerVertices[0].x, innerVertices[0].y)
+        lineTo(innerVertices[1].x, innerVertices[1].y)
+        lineTo(innerVertices[2].x, innerVertices[2].y)
+        close()
+    }
+
+    // Intense cyan-white radial core glow behind triangle
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.95f),
+                cyanColor.copy(alpha = 0.85f),
+                cyanColor.copy(alpha = 0.25f),
+                Color.Transparent
+            ),
+            center = center,
+            radius = coreRadius * 1.15f
+        ),
+        radius = coreRadius * 1.15f,
+        center = center
+    )
+
+    // Fill outer triangle with glowing cyan gradient
+    drawPath(
+        path = outerTriangle,
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White,
+                cyanColor.copy(alpha = 0.92f),
+                Color(0xFF0055AA).copy(alpha = 0.85f)
+            ),
+            center = center,
+            radius = coreRadius
+        )
+    )
+
+    // Outer triangle metallic cyan + white border
+    drawPath(
+        path = outerTriangle,
+        color = cyanColor,
+        style = Stroke(width = 5.5f, join = StrokeJoin.Round)
+    )
+    drawPath(
+        path = outerTriangle,
+        color = Color.White.copy(alpha = 0.92f),
+        style = Stroke(width = 2.2f, join = StrokeJoin.Round)
+    )
+
+    // Inner brilliant white-cyan triangle
+    drawPath(
+        path = innerTriangle,
+        color = Color.White.copy(alpha = 0.95f)
+    )
+    drawPath(
+        path = innerTriangle,
+        color = cyanColor,
+        style = Stroke(width = 2.5f, join = StrokeJoin.Round)
+    )
+
+    // Internal lattice struts connecting outer & inner triangle vertices
+    for (i in 0..2) {
+        drawLine(
+            color = goldColor.copy(alpha = 0.85f),
+            start = outerVertices[i],
+            end = innerVertices[i],
+            strokeWidth = 2.4f,
+            cap = StrokeCap.Round
+        )
     }
 }
 
@@ -492,51 +700,6 @@ private fun DrawScope.drawPolarAudioSpectrumRing(
     }
 }
 
-private fun DrawScope.draw3DGyroscopicRings(
-    center: Offset,
-    radius: Float,
-    spinDeg: Float,
-    counterSpinDeg: Float,
-    primaryColor: Color,
-    secondaryColor: Color
-) {
-    // Ring 1: Tilted X-Y Astrolabe Ellipse (Gold/Amber)
-    rotate(degrees = spinDeg * 0.7f, pivot = center) {
-        val ovalWidth = radius * 2f
-        val ovalHeight = radius * 0.76f
-        drawOval(
-            color = primaryColor.copy(alpha = 0.42f),
-            topLeft = Offset(center.x - ovalWidth / 2f, center.y - ovalHeight / 2f),
-            size = Size(ovalWidth, ovalHeight),
-            style = Stroke(width = 2.0f)
-        )
-    }
-
-    // Ring 2: Orthogonal Tilted Gimbal Ellipse (Cyan)
-    rotate(degrees = -counterSpinDeg * 0.85f + 60f, pivot = center) {
-        val ovalWidth = radius * 1.88f
-        val ovalHeight = radius * 0.64f
-        drawOval(
-            color = secondaryColor.copy(alpha = 0.38f),
-            topLeft = Offset(center.x - ovalWidth / 2f, center.y - ovalHeight / 2f),
-            size = Size(ovalWidth, ovalHeight),
-            style = Stroke(width = 1.8f)
-        )
-    }
-
-    // Ring 3: High-Inclination Synaptic Orbit (Gold + Data Node Pips)
-    rotate(degrees = spinDeg * 1.15f - 35f, pivot = center) {
-        val ovalWidth = radius * 1.72f
-        val ovalHeight = radius * 0.92f
-        drawOval(
-            color = primaryColor.copy(alpha = 0.30f),
-            topLeft = Offset(center.x - ovalWidth / 2f, center.y - ovalHeight / 2f),
-            size = Size(ovalWidth, ovalHeight),
-            style = Stroke(width = 1.4f)
-        )
-    }
-}
-
 private fun DrawScope.drawAgeOfUltronMindLattice3D(
     center: Offset,
     sphereRadius: Float,
@@ -554,11 +717,9 @@ private fun DrawScope.drawAgeOfUltronMindLattice3D(
     val cosPitch = cos(pitchRad)
     val sinPitch = sin(pitchRad)
 
-    // Project all 3D nodes into 2D canvas coordinates with perspective depth
     val projected = ArrayList<ProjectedNode>(nodes.size)
     for (i in nodes.indices) {
         val n = nodes[i]
-        // Organic neural oscillation per node
         val pulse = 1f + 0.05f * sin(wavePhase * 1.5f + i * 0.37f) + (amplitude * 0.08f)
         val r = n.layerScale * pulse
 
@@ -566,15 +727,12 @@ private fun DrawScope.drawAgeOfUltronMindLattice3D(
         val y0 = n.y * r
         val z0 = n.z * r
 
-        // Rotate around Y-axis (yaw)
         val x1 = x0 * cosYaw + z0 * sinYaw
         val z1 = -x0 * sinYaw + z0 * cosYaw
 
-        // Rotate around X-axis (pitch)
         val y2 = y0 * cosPitch - z1 * sinPitch
         val z2 = y0 * sinPitch + z1 * cosPitch
 
-        // Perspective factor (camera distance = 2.6)
         val perspective = 2.6f / (2.6f - z2.coerceIn(-1.2f, 1.2f))
         val sx = center.x + x1 * sphereRadius * perspective
         val sy = center.y + y2 * sphereRadius * perspective
@@ -591,14 +749,12 @@ private fun DrawScope.drawAgeOfUltronMindLattice3D(
         )
     }
 
-    // Draw 3D synaptic filaments connecting nearby nodes
     for (edgeIndex in edges.indices) {
         val (idxA, idxB) = edges[edgeIndex]
         val a = projected[idxA]
         val b = projected[idxB]
         val avgZ = (a.zDepth + b.zDepth) * 0.5f
 
-        // Depth-cull far back edges slightly for clean 3D volumetric clarity
         val depthAlpha = ((avgZ + 1.15f) / 2.3f).coerceIn(0.10f, 0.92f)
         val isCrossShellBridge = a.layerScale != b.layerScale
         val pulseBoost = 0.5f + 0.5f * sin(wavePhase * 2.2f + edgeIndex * 0.31f)
@@ -613,31 +769,21 @@ private fun DrawScope.drawAgeOfUltronMindLattice3D(
             color = filamentColor,
             start = Offset(a.screenX, a.screenY),
             end = Offset(b.screenX, b.screenY),
-            strokeWidth = if (isCrossShellBridge) 1.3f else 1.7f * ((avgZ + 1.5f) * 0.45f),
+            strokeWidth = if (isCrossShellBridge) 1.2f else 1.5f * ((avgZ + 1.5f) * 0.45f),
             cap = StrokeCap.Round
         )
     }
 
-    // Draw 3D neural cortex nodes (front nodes brighter and larger than back-hemisphere nodes)
     for (i in projected.indices) {
         val p = projected[i]
         val depthFactor = ((p.zDepth + 1.15f) / 2.3f).coerceIn(0.18f, 1.0f)
-        val nodeRadius = (if (p.isHub) 4.4f else 2.6f) * p.scale * (0.75f + 0.4f * depthFactor)
+        val nodeRadius = (if (p.isHub) 3.8f else 2.2f) * p.scale * (0.75f + 0.4f * depthFactor)
         val nodeColor = if (p.layerScale < 0.8f) {
             secondaryColor
         } else if (p.isHub) {
             Color.White
         } else {
             primaryColor
-        }
-
-        if (p.isHub && p.zDepth > -0.2f) {
-            // Subtle holographic halo around foreground hub synapses
-            drawCircle(
-                color = primaryColor.copy(alpha = 0.28f * depthFactor),
-                radius = nodeRadius * 2.4f,
-                center = Offset(p.screenX, p.screenY)
-            )
         }
 
         drawCircle(
@@ -660,14 +806,13 @@ private fun DrawScope.drawStateSpecificHoloprojector(
 ) {
     when (state) {
         VoiceState.SPEAKING -> {
-            // Full-Duplex Barge-In Ready Acoustic Ripples
             val rippleCount = 3
             for (r in 1..rippleCount) {
                 val expand = ((wavePhase / (2f * PI.toFloat())) + r * 0.33f) % 1f
                 val rippleR = baseRadius * (0.35f + expand * 0.65f) * (1f + amplitude * 0.15f)
                 val alpha = (1f - expand) * (0.35f + amplitude * 0.40f)
                 drawCircle(
-                    color = secondaryColor.copy(alpha = alpha.coerceIn(0f, 0.75f)),
+                    color = primaryColor.copy(alpha = alpha.coerceIn(0f, 0.75f)),
                     radius = rippleR,
                     center = center,
                     style = Stroke(width = 2.2f)
@@ -675,7 +820,6 @@ private fun DrawScope.drawStateSpecificHoloprojector(
             }
         }
         VoiceState.LISTENING -> {
-            // Active Voice Lock Reticle & Sonar Sweep
             val sonarRadius = baseRadius * (0.50f + amplitude * 0.38f)
             drawCircle(
                 color = SuccessEmerald.copy(alpha = 0.65f),
@@ -685,7 +829,6 @@ private fun DrawScope.drawStateSpecificHoloprojector(
             )
         }
         VoiceState.THINKING, VoiceState.PROCESSING -> {
-            // Fast Synaptic Computation Orbiting Data Clusters
             rotate(degrees = primaryRotation * 2.1f, pivot = center) {
                 val orbitR = baseRadius * 0.68f
                 for (k in 0 until 8) {
@@ -696,19 +839,13 @@ private fun DrawScope.drawStateSpecificHoloprojector(
                     )
                     drawCircle(
                         color = Color.White.copy(alpha = 0.92f),
-                        radius = 4.5f,
-                        center = nodePos
-                    )
-                    drawCircle(
-                        color = primaryColor.copy(alpha = 0.45f),
-                        radius = 9.5f,
+                        radius = 4.2f,
                         center = nodePos
                     )
                 }
             }
         }
         VoiceState.ERROR -> {
-            // Crimson Diagnostic Alert Brackets
             val alertR = baseRadius * 0.92f
             drawCircle(
                 color = AlertCrimson.copy(alpha = 0.75f),
@@ -719,16 +856,4 @@ private fun DrawScope.drawStateSpecificHoloprojector(
         }
         VoiceState.IDLE -> Unit
     }
-}
-
-private fun createPolygonPath(center: Offset, radius: Float, sides: Int): Path {
-    val path = Path()
-    for (i in 0 until sides) {
-        val angleRad = (2.0 * PI * i / sides) - (PI / 2.0)
-        val x = center.x + (radius * cos(angleRad)).toFloat()
-        val y = center.y + (radius * sin(angleRad)).toFloat()
-        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-    }
-    path.close()
-    return path
 }
